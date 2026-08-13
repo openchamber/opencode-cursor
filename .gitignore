@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Local agent notes / environment-specific
+AGENTS.md
+
+# Graphify knowledge graph output
+graphify-out/

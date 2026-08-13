@@ -1,0 +1,59 @@
+{
+  "name": "@openchamber/opencode-cursor",
+  "version": "2.2.0",
+  "description": "Cursor models in OpenCode — native OAuth, live catalog discovery, agent-grade streaming. Direct API, no cursor-agent binary.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-runtime.mjs",
+    "test": "bun test/smoke.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openchamber/opencode-cursor.git"
+  },
+  "homepage": "https://github.com/openchamber/opencode-cursor",
+  "bugs": {
+    "url": "https://github.com/openchamber/opencode-cursor/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "cursor",
+    "cursor-pro",
+    "oauth",
+    "openai-compatible",
+    "ai",
+    "llm",
+    "streaming",
+    "agent"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.0.0",
+    "@opencode-ai/plugin": "^1.15.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.11",
+    "typescript": "^5.9.3"
+  }
+}

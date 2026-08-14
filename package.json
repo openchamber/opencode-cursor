@@ -1,6 +1,6 @@
 {
   "name": "@openchamber/opencode-cursor",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Cursor models in OpenCode — native OAuth, live catalog discovery, agent-grade streaming. Direct API, no cursor-agent binary.",
   "license": "MIT",
   "type": "module",

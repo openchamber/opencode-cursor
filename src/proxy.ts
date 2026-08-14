@@ -48,6 +48,8 @@ import {
   McpToolNotFoundSchema,
   McpToolResultContentItemSchema,
   ModelDetailsSchema,
+  NameAgentRequestSchema,
+  NameAgentResponseSchema,
   RequestedModelSchema,
   RequestedModel_ModelParameterbytesSchema,
   ReadRejectedSchema,
@@ -79,6 +81,7 @@ import {
   BRIDGE_PATH,
   CURSOR_API_URL,
   callCursorUnaryRpc,
+  decodeConnectUnaryProtoBody,
 } from "./cursor-rpc.js";
 import {
   type ChatCompletionRequest,
@@ -869,6 +872,55 @@ export function stopProxy(): void {
   proxyTelemetry.lastSnapshotMs = 0;
 }
 
+const NAME_AGENT_PATH = "/agent.v1.AgentService/NameAgent";
+
+function decodeNameAgentResponse(payload: Uint8Array): { name: string } | null {
+  try {
+    return fromBinary(NameAgentResponseSchema, payload);
+  } catch {
+    const framedBody = decodeConnectUnaryProtoBody(payload);
+    if (!framedBody) return null;
+    try {
+      return fromBinary(NameAgentResponseSchema, framedBody);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Ask Cursor's own agent-naming endpoint for a short session title — the
+ * same "generate a very short, succinct agent name" RPC Cursor's own
+ * clients use. Fast dedicated unary call, no dependency on OpenCode Zen or
+ * a manually configured title model. Returns null on any failure/timeout
+ * so the caller can fall back.
+ */
+async function nameConversationViaCursor(
+  accessToken: string,
+  userMessage: string,
+): Promise<string | null> {
+  if (!userMessage.trim()) return null;
+  try {
+    const requestBody = toBinary(
+      NameAgentRequestSchema,
+      create(NameAgentRequestSchema, { userMessage }),
+    );
+    const response = await callCursorUnaryRpc({
+      accessToken,
+      rpcPath: NAME_AGENT_PATH,
+      requestBody,
+    });
+    if (response.timedOut || response.exitCode !== 0 || response.body.length === 0) {
+      return null;
+    }
+    const name = decodeNameAgentResponse(response.body)?.name?.trim();
+    return name ? name : null;
+  } catch (err) {
+    log.warn(`[proxy] Cursor NameAgent call failed: ${err}`);
+    return null;
+  }
+}
+
 /** Handle title-gen through the explicitly configured OpenCode Zen model. */
 async function handleTitleGenViaZen(
   modelId: string,
@@ -885,38 +937,46 @@ async function handleTitleGenViaZen(
     });
     if (!zenResponse.ok) {
       log.warn(`[proxy] title-gen Zen returned ${zenResponse.status}, falling back to empty`);
-      return buildEmptyTitleResponse(completionId, created, modelId);
+      return buildTitleResponse(completionId, created, modelId);
     }
     return new Response(zenResponse.body, { headers: SSE_HEADERS });
   } catch (err) {
     log.warn(`[proxy] title-gen Zen failed: ${err}, returning empty`);
-    return buildEmptyTitleResponse(completionId, created, modelId);
+    return buildTitleResponse(completionId, created, modelId);
   }
 }
 
-/** Return a clean empty title response — leaves the thread name unchanged. */
-function buildEmptyTitleResponse(completionId: string, created: number, modelId: string): Response {
+/** Build a title-gen SSE response. Empty/omitted `title` leaves the thread name unchanged. */
+function buildTitleResponse(
+  completionId: string,
+  created: number,
+  modelId: string,
+  title = "",
+): Response {
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({
-        id: completionId,
-        object: "chat.completion.chunk",
-        created,
-        model: modelId,
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      })}\n\n`));
+      const send = (choice: Record<string, unknown>) =>
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              id: completionId,
+              object: "chat.completion.chunk",
+              created,
+              model: modelId,
+              choices: [choice],
+            })}\n\n`,
+          ),
+        );
+      if (title) {
+        send({ index: 0, delta: { role: "assistant", content: title }, finish_reason: null });
+      }
+      send({ index: 0, delta: {}, finish_reason: "stop" });
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();
     },
   });
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  return new Response(stream, { headers: SSE_HEADERS });
 }
 
 async function handleChatCompletion(
@@ -974,15 +1034,20 @@ async function handleChatCompletion(
   }
 
   if (isTitleGenerationRequest(body.messages)) {
+    const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 28)}`;
+    const created = Math.floor(Date.now() / 1000);
+    release();
+
+    const cursorName = await nameConversationViaCursor(accessToken, userText);
+    if (cursorName) {
+      log.info(`[proxy] title-gen via Cursor NameAgent: "${cursorName}"`);
+      return buildTitleResponse(completionId, created, modelId, cursorName);
+    }
+
     const titleModelId =
       process.env.OPENCODE_CURSOR_TITLE_GEN_MODEL?.trim();
-    release();
     if (!titleModelId) {
-      return buildEmptyTitleResponse(
-        `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 28)}`,
-        Math.floor(Date.now() / 1000),
-        modelId,
-      );
+      return buildTitleResponse(completionId, created, modelId);
     }
     log.info(`[proxy] title-gen request model=${modelId} → zen ${titleModelId}`);
     return handleTitleGenViaZen(titleModelId, body);
@@ -1579,7 +1644,27 @@ export function computeUsage(state: StreamState) {
     Math.floor(state.promptTokens > 0 ? state.promptTokens : state.fallbackPromptTokens) || 0,
   );
   const total_tokens = prompt_tokens + completion_tokens;
-  return { prompt_tokens, completion_tokens, total_tokens };
+
+  // Cursor's Agent protocol never reports prompt-cache stats, so OpenCode's
+  // cache meter would otherwise always read 0 even though agent-loop prompts
+  // are append-only and providers cache the unchanged prefix on every turn.
+  // Approximate the cache-read portion as last turn's full prompt size, since
+  // that entire prefix reappears verbatim in this turn's prompt. Only applies
+  // when Cursor reported a live count (not a carried-over fallback) and the
+  // prompt grew — a shrink (e.g. right after /compact) means the prefix was
+  // rewritten and nothing can be assumed cached.
+  const previousPromptTokens = Math.floor(state.fallbackPromptTokens) || 0;
+  const cachedTokens =
+    state.promptTokens > 0 && previousPromptTokens > 0 && prompt_tokens >= previousPromptTokens
+      ? previousPromptTokens
+      : 0;
+
+  return {
+    prompt_tokens,
+    completion_tokens,
+    total_tokens,
+    ...(cachedTokens > 0 ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
+  };
 }
 
 /** Decode just the prompt/context token count from a persisted checkpoint. */

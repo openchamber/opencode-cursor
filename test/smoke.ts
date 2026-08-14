@@ -1037,6 +1037,88 @@ async function testProxyConsumesCursorModelHeader(
   console.log("[test] Proxy Cursor model header routing OK");
 }
 
+async function testTitleGenViaCursorNameAgent(
+  modules: TestModules,
+  backend: TestCursorBackend,
+) {
+  console.log("[test] Testing title-gen via Cursor NameAgent...");
+  modules.stopProxy();
+  backend.setRunMode("immediate-close");
+  backend.setNameAgentResponse("Fix flaky login redirect");
+  backend.resetObservations();
+
+  const port = await modules.startProxy(async () => "test-token");
+  const res = await postChat(`http://localhost:${port}/v1/chat/completions`, {
+    model: "default",
+    stream: true,
+    messages: [
+      {
+        role: "system",
+        content: "You are a title generator. Generate a short title for the conversation.",
+      },
+      {
+        role: "user",
+        content: "Help me fix the flaky login redirect bug in the auth service.",
+      },
+    ],
+  });
+
+  assertEqual(res.status, 200, "Expected title-gen request to succeed");
+  const bodyText = await res.text();
+  assert(
+    bodyText.includes(`"content":"Fix flaky login redirect"`),
+    `Expected the Cursor NameAgent title in the SSE stream, got: ${bodyText.slice(0, 300)}`,
+  );
+  assert(bodyText.includes("data: [DONE]"), "Title response must terminate with [DONE]");
+  assertEqual(
+    backend.getRunRequestCount(),
+    0,
+    "Title-gen must never hit the live agent Run RPC",
+  );
+  assertArrayEqual(
+    backend.getNameAgentUserMessages(),
+    ["Help me fix the flaky login redirect bug in the auth service."],
+    "Expected the user's message forwarded to Cursor's NameAgent RPC",
+  );
+
+  modules.stopProxy();
+  console.log("[test] Title-gen via Cursor NameAgent OK");
+}
+
+async function testTitleGenFallsBackToEmptyWhenCursorNamingFails(
+  modules: TestModules,
+  backend: TestCursorBackend,
+) {
+  console.log("[test] Testing title-gen falls back to empty when Cursor naming fails...");
+  modules.stopProxy();
+  backend.setRunMode("immediate-close");
+  backend.setNameAgentResponse(null);
+  backend.resetObservations();
+  delete process.env.OPENCODE_CURSOR_TITLE_GEN_MODEL;
+
+  const port = await modules.startProxy(async () => "test-token");
+  const res = await postChat(`http://localhost:${port}/v1/chat/completions`, {
+    model: "default",
+    stream: true,
+    messages: [
+      { role: "system", content: "You are a title generator." },
+      { role: "user", content: "Help me fix the flaky login redirect bug." },
+    ],
+  });
+
+  assertEqual(res.status, 200, "Expected title-gen request to still succeed");
+  const bodyText = await res.text();
+  assert(
+    !bodyText.includes(`"content"`),
+    `Expected no content delta when Cursor naming is unavailable and no Zen model is configured, got: ${bodyText.slice(0, 300)}`,
+  );
+  assert(bodyText.includes("data: [DONE]"), "Empty title response must still terminate with [DONE]");
+
+  backend.setNameAgentResponse("Mock Session Title");
+  modules.stopProxy();
+  console.log("[test] Title-gen empty fallback OK");
+}
+
 async function testConfigHookSeedsProvider(
   modules: TestModules,
   backend: TestCursorBackend,
@@ -2138,6 +2220,77 @@ async function testComputeUsageFallback(modules: TestModules) {
   console.log("[test] computeUsage context fallback OK");
 }
 
+async function testComputeUsageCacheEstimate(modules: TestModules) {
+  console.log("[test] Testing computeUsage cache-hit estimate...");
+
+  const firstTurn = modules.computeUsage({
+    toolCallIndex: 0,
+    pendingExecs: [],
+    outputTokens: 10,
+    promptTokens: 2_000,
+    fallbackPromptTokens: 0,
+  });
+  assertEqual(
+    firstTurn.prompt_tokens_details,
+    undefined,
+    "First turn has no prior context — nothing could have been cached",
+  );
+
+  const grown = modules.computeUsage({
+    toolCallIndex: 0,
+    pendingExecs: [],
+    outputTokens: 10,
+    promptTokens: 5_000,
+    fallbackPromptTokens: 2_000,
+  });
+  assertEqual(
+    grown.prompt_tokens_details?.cached_tokens,
+    2_000,
+    "Growing context should report last turn's full prompt as cached",
+  );
+
+  const unchanged = modules.computeUsage({
+    toolCallIndex: 0,
+    pendingExecs: [],
+    outputTokens: 10,
+    promptTokens: 5_000,
+    fallbackPromptTokens: 5_000,
+  });
+  assertEqual(
+    unchanged.prompt_tokens_details?.cached_tokens,
+    5_000,
+    "An unchanged prompt should report a full cache hit",
+  );
+
+  const shrunk = modules.computeUsage({
+    toolCallIndex: 0,
+    pendingExecs: [],
+    outputTokens: 10,
+    promptTokens: 1_000,
+    fallbackPromptTokens: 5_000,
+  });
+  assertEqual(
+    shrunk.prompt_tokens_details,
+    undefined,
+    "A shrinking prompt (e.g. right after /compact) must not claim a cache hit",
+  );
+
+  const fallbackOnly = modules.computeUsage({
+    toolCallIndex: 0,
+    pendingExecs: [],
+    outputTokens: 10,
+    promptTokens: 0,
+    fallbackPromptTokens: 5_000,
+  });
+  assertEqual(
+    fallbackOnly.prompt_tokens_details,
+    undefined,
+    "A carried-over fallback count (no live Cursor checkpoint this turn) must not claim a cache hit",
+  );
+
+  console.log("[test] computeUsage cache-hit estimate OK");
+}
+
 async function testInterruptSteerHelpers() {
   console.log("[test] Testing interrupt/steer helpers...");
   const proxy = await import("../src/proxy");
@@ -3078,12 +3231,15 @@ async function main() {
     await testPoolSequentialRequests();
     await testPoolOverflowEphemeralWorkers();
     await testProxyConsumesCursorModelHeader(modules, backend);
+    await testTitleGenViaCursorNameAgent(modules, backend);
+    await testTitleGenFallsBackToEmptyWhenCursorNamingFails(modules, backend);
     await testStreamingWatchdogRecoversFromStalledRun(modules, backend);
     await testStallExhaustionIsHonest(modules, backend);
     await testHeartbeatKeepalivesDoNotBlockStallRecovery(modules, backend);
     await testMutexAbortDoesNotBlockQueue();
     await testSummaryGenerationDetection(modules);
     await testComputeUsageFallback(modules);
+    await testComputeUsageCacheEstimate(modules);
     await testInterruptSteerHelpers();
     await testParseMessagesPreservesUserDuringToolLoop();
     await testParseMessagesOrphanedToolResultsDoNotReplan();

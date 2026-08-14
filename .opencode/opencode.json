@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "@openchamber/opencode-cursor@2.2.0"
+    "@openchamber/opencode-cursor@2.4.0"
   ]
 }

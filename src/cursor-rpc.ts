@@ -44,6 +44,39 @@ function spawnBridge(options: CursorUnaryRpcOptions) {
   return proc;
 }
 
+/**
+ * Unwrap a Connect-protocol unary response frame: 1 flag byte + 4-byte
+ * big-endian length + payload. Returns null for trailer-only frames (flag
+ * bit 0x02) or malformed input — callers fall back to treating the body as
+ * bare protobuf when Cursor skips framing.
+ */
+export function decodeConnectUnaryProtoBody(payload: Uint8Array): Uint8Array | null {
+  if (payload.length < 5) return null;
+
+  let offset = 0;
+  while (offset + 5 <= payload.length) {
+    const flags = payload[offset]!;
+    const view = new DataView(
+      payload.buffer,
+      payload.byteOffset + offset,
+      payload.byteLength - offset,
+    );
+    const messageLength = view.getUint32(1, false);
+    const frameEnd = offset + 5 + messageLength;
+    if (frameEnd > payload.length) return null;
+
+    if ((flags & 0b0000_0001) !== 0) return null;
+
+    if ((flags & 0b0000_0010) === 0) {
+      return payload.subarray(offset + 5, frameEnd);
+    }
+
+    offset = frameEnd;
+  }
+
+  return null;
+}
+
 export async function callCursorUnaryRpc(
   options: CursorUnaryRpcOptions,
 ): Promise<{ body: Uint8Array; exitCode: number; timedOut: boolean }> {

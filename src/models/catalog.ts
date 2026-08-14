@@ -1,5 +1,5 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { callCursorUnaryRpc } from "../cursor-rpc.js";
+import { callCursorUnaryRpc, decodeConnectUnaryProtoBody } from "../cursor-rpc.js";
 import {
   GetUsableModelsRequestSchema,
   GetUsableModelsResponseSchema,
@@ -112,7 +112,7 @@ function decodeGetUsableModelsResponse(payload: Uint8Array): {
   try {
     return fromBinary(GetUsableModelsResponseSchema, payload);
   } catch {
-    const framedBody = decodeConnectUnaryBody(payload);
+    const framedBody = decodeConnectUnaryProtoBody(payload);
     if (!framedBody) return null;
     try {
       return fromBinary(GetUsableModelsResponseSchema, framedBody);
@@ -120,33 +120,6 @@ function decodeGetUsableModelsResponse(payload: Uint8Array): {
       return null;
     }
   }
-}
-
-function decodeConnectUnaryBody(payload: Uint8Array): Uint8Array | null {
-  if (payload.length < 5) return null;
-
-  let offset = 0;
-  while (offset + 5 <= payload.length) {
-    const flags = payload[offset]!;
-    const view = new DataView(
-      payload.buffer,
-      payload.byteOffset + offset,
-      payload.byteLength - offset,
-    );
-    const messageLength = view.getUint32(1, false);
-    const frameEnd = offset + 5 + messageLength;
-    if (frameEnd > payload.length) return null;
-
-    if ((flags & 0b0000_0001) !== 0) return null;
-
-    if ((flags & 0b0000_0010) === 0) {
-      return payload.subarray(offset + 5, frameEnd);
-    }
-
-    offset = frameEnd;
-  }
-
-  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

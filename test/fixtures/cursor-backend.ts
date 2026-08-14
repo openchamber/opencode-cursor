@@ -9,6 +9,8 @@ import {
   GetUsableModelsResponseSchema,
   McpArgsSchema,
   ModelDetailsSchema,
+  NameAgentRequestSchema,
+  NameAgentResponseSchema,
 } from "../../src/proto/agent_pb";
 import {
   frameConnectUnaryMessage,
@@ -46,6 +48,9 @@ export interface TestCursorBackend {
   setRefreshResponseRefreshToken: (
     value: string | null | undefined,
   ) => void;
+  /** Set the name AgentService.NameAgent returns. `null` simulates a server error. */
+  setNameAgentResponse: (name: string | null) => void;
+  getNameAgentUserMessages: () => string[];
   setRunMode: (mode: RunMode) => void;
   getRunRequestCount: () => number;
   getRunUserTexts: () => string[];
@@ -76,6 +81,8 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
     { id: "composer-2", name: "Composer 2", reasoning: true },
   ];
   let availableModels: unknown[] | undefined;
+  let nameAgentResponseName: string | null = "Mock Session Title";
+  const nameAgentUserMessages: string[] = [];
   const runSelections: Array<{
     publicId?: string;
     displayName?: string;
@@ -355,6 +362,38 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
         return;
       }
 
+      if (path === "/agent.v1.AgentService/NameAgent") {
+        try {
+          const request = fromBinary(NameAgentRequestSchema, Buffer.concat(chunks));
+          nameAgentUserMessages.push(request.userMessage);
+        } catch {
+          // Malformed test payload — leave userMessages as-is for the assertion to catch.
+        }
+
+        if (nameAgentResponseName === null) {
+          stream.respond({
+            ":status": 500,
+            "content-type": "application/json",
+          });
+          stream.end(JSON.stringify({ error: "name agent unavailable" }));
+          return;
+        }
+
+        stream.respond({
+          ":status": 200,
+          "content-type": "application/connect+proto",
+        });
+        stream.end(
+          frameConnectUnaryMessage(
+            toBinary(
+              NameAgentResponseSchema,
+              create(NameAgentResponseSchema, { name: nameAgentResponseName }),
+            ),
+          ),
+        );
+        return;
+      }
+
       if (path === "/agent.v1.AgentService/GetUsableModels") {
         discoveryAuthHeaders.push(authHeader);
 
@@ -423,6 +462,13 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
     resetObservations() {
       discoveryAuthHeaders.length = 0;
       refreshAuthHeaders.length = 0;
+      nameAgentUserMessages.length = 0;
+    },
+    setNameAgentResponse(name) {
+      nameAgentResponseName = name;
+    },
+    getNameAgentUserMessages() {
+      return [...nameAgentUserMessages];
     },
     getDiscoveryAuthHeaders() {
       return [...discoveryAuthHeaders];

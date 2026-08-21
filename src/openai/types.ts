@@ -82,6 +82,22 @@ export function textContent(content: OpenAIMessage["content"]): string {
     .join("\n");
 }
 
-export function shouldBlockTool(tool: OpenAIToolDef): boolean {
-  return tool.function.name.trim().toLowerCase() === "task";
+/**
+ * OpenCode's `task` (subagent delegation) tool must be bridged under an
+ * unambiguous name. Cursor's engine also has a native `task` tool that runs
+ * server-side: calls to it never reach this bridge and are silently dropped
+ * from the stream, hanging the turn. Advertising an MCP tool with the same
+ * name invites the model to pick the native one and lose the call. So the
+ * tool is advertised as TASK_BRIDGE_NAME and mapped back to TASK_TOOL_NAME
+ * when the tool_call is surfaced to OpenCode (results match by id, not name).
+ */
+export const TASK_TOOL_NAME = "task";
+export const TASK_BRIDGE_NAME = "opencode_task";
+
+export function bridgeToolName(name: string): string {
+  return name.trim().toLowerCase() === TASK_TOOL_NAME ? TASK_BRIDGE_NAME : name;
+}
+
+export function originalToolName(bridgedName: string): string {
+  return bridgedName === TASK_BRIDGE_NAME ? TASK_TOOL_NAME : bridgedName;
 }

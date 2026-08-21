@@ -88,7 +88,8 @@ import {
   type ExtractedImage,
   type OpenAIToolDef,
   type ToolResultInfo,
-  shouldBlockTool,
+  bridgeToolName,
+  originalToolName,
 } from "./openai/types.js";
 import { extractImagesFromContent } from "./openai/images.js";
 import {
@@ -1013,9 +1014,9 @@ async function handleChatCompletion(
   const isSummary = isSummaryGenerationRequest(body.messages);
   // /compact and summary agents must never see tools — Cursor would call them
   // and OpenCode throws "Tool call not allowed while generating summary".
-  const tools = isSummary
-    ? []
-    : (body.tools ?? []).filter((tool) => !shouldBlockTool(tool));
+  // The `task` tool is no longer dropped: it is bridged under a renamed
+  // MCP tool (see buildMcpToolDefinitions) so subagent delegation works.
+  const tools = isSummary ? [] : (body.tools ?? []);
   const workspaceRoot = extractWorkspaceRoot(systemPrompt);
   log.info(
     `[proxy] bridge model input=${body.model} resolved=${modelId} server=${selection.modelId} max=${selection.maxMode}${isSummary ? " summary=1" : ""} userChars=${userText.length} images=${images.length} tools=${toolResults.length}`,
@@ -1288,16 +1289,19 @@ async function handleChatCompletion(
 function buildMcpToolDefinitions(tools: OpenAIToolDef[]): McpToolDefinition[] {
   return tools.map((t) => {
     const fn = t.function;
+    // `task` collides with Cursor's native server-side task tool — bridge it
+    // under TASK_BRIDGE_NAME so the model's call routes to our MCP path.
+    const bridgedName = bridgeToolName(fn.name);
     const jsonSchema: JsonValue =
       fn.parameters && typeof fn.parameters === "object"
         ? (fn.parameters as JsonValue)
         : { type: "object", properties: {}, required: [] };
     const inputSchema = toBinary(ValueSchema, fromJson(ValueSchema, jsonSchema));
     return create(McpToolDefinitionSchema, {
-      name: fn.name,
+      name: bridgedName,
       description: fn.description || "",
       providerIdentifier: "opencode",
-      toolName: fn.name,
+      toolName: bridgedName,
       inputSchema,
     });
   });
@@ -1826,7 +1830,7 @@ function handleExecMessage(
       : " NEVER use /workspace/ as a path prefix — it does not exist. Use the absolute paths exactly as provided in the system prompt and tool responses.";
     const MCP_ONLY_RULE = toolsDisabled
       ? `CRITICAL: You are generating a conversation summary/compaction. Do NOT call any tools (native or MCP) — read, ls, grep, shell, write, delete, fetch, and every MCP tool are forbidden. Output ONLY the requested summary as plain text.`
-      : `CRITICAL: Do NOT use native tools (read, ls, grep, shell, write, delete, fetch, diagnostics, backgroundShellSpawn, writeShellStdin). They are ALL disabled in this environment. Use ONLY the MCP tools provided in the tools list. Every native tool call will be rejected and waste time. Always use MCP tools for all file operations, shell commands, searches, and any other actions.${workspaceNote}`;
+      : `CRITICAL: Do NOT use native tools (read, ls, grep, shell, write, delete, fetch, diagnostics, backgroundShellSpawn, writeShellStdin, task). They are ALL disabled in this environment. Use ONLY the MCP tools provided in the tools list. Every native tool call will be rejected and waste time. Always use MCP tools for all file operations, shell commands, searches, and any other actions. To delegate work to subagents, call the opencode_task MCP tool — the native task tool runs remotely and its result never reaches this session.${workspaceNote}`;
 
     const requestContext = create(RequestContextSchema, {
       rules: [
@@ -2541,7 +2545,9 @@ function createBridgeStreamResponse(
                         id: exec.toolCallId,
                         type: "function",
                         function: {
-                          name: exec.toolName,
+                          // Map the bridged name (opencode_task) back to the
+                          // OpenCode tool name (task) — OpenCode dispatches by name.
+                          name: originalToolName(exec.toolName),
                           arguments: exec.decodedArgs,
                         },
                       }],

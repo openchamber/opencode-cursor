@@ -3075,6 +3075,73 @@ async function testAdaptivePostTextStallBudget(
   console.log("[test] Adaptive stall budget OK");
 }
 
+async function testTaskToolBridging(
+  modules: TestModules,
+  backend: TestCursorBackend,
+) {
+  console.log("[test] Testing task (subagent) tool bridging rename...");
+  // Regression: OpenCode's `task` tool used to be dropped entirely (models
+  // saw no delegation tool). It must now be advertised under the bridged name
+  // opencode_task (avoiding Cursor's native server-side task tool) and the
+  // surfaced tool_call must carry the ORIGINAL name so OpenCode dispatches it.
+  modules.stopProxy();
+  backend.setRunMode("task-tool-call");
+  const port = await modules.startProxy(async () => "test-token");
+
+  const tools = [
+    {
+      type: "function",
+      function: {
+        name: "task",
+        description: "Launch a subagent",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    {
+      type: "function",
+      function: { name: "bash", description: "run shell", parameters: { type: "object", properties: {} } },
+    },
+  ];
+
+  const res = await postChat(`http://localhost:${port}/v1/chat/completions`, {
+    model: "default",
+    tools,
+    messages: [
+      { role: "system", content: "You are opencode." },
+      { role: "user", content: "delegate this to oracle" },
+    ],
+  });
+  assertEqual(res.status, 200, "Task tool request must succeed");
+  const body = await res.text();
+  assert(body.includes('"tool_calls"'), "Task tool call must stream tool_calls");
+  assert(
+    body.includes('"name":"task"'),
+    `Surfaced tool_call must use the original name "task"; got: ${body.slice(0, 400)}`,
+  );
+  assert(
+    !body.includes('"name":"opencode_task"'),
+    "Bridged name must not leak to OpenCode",
+  );
+
+  const advertised = backend.getAdvertisedToolNames();
+  assert(
+    advertised.includes("opencode_task"),
+    `RequestContext must advertise opencode_task; got: ${JSON.stringify(advertised)}`,
+  );
+  assert(
+    !advertised.includes("task"),
+    `RequestContext must NOT advertise a tool literally named "task" (native collision); got: ${JSON.stringify(advertised)}`,
+  );
+  assert(
+    advertised.includes("bash"),
+    "Non-task tools must keep their names",
+  );
+
+  backend.setRunMode("immediate-close");
+  modules.stopProxy();
+  console.log("[test] Task tool bridging OK");
+}
+
 async function testPreOutputStallBudgetAllowsSlowThinking(
   modules: TestModules,
   backend: TestCursorBackend,
@@ -3250,6 +3317,7 @@ async function main() {
     await testUserSteerDetectionTailOnly(modules);
     await testSteerVsResumeThroughProxy(modules, backend);
     await testAdaptivePostTextStallBudget(modules, backend);
+    await testTaskToolBridging(modules, backend);
     await testPreOutputStallBudgetAllowsSlowThinking(modules, backend);
     await testPostToolPreOutputStallBudget(modules, backend);
     console.log("\n✓ All smoke tests passed");

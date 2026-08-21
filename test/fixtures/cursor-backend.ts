@@ -11,6 +11,7 @@ import {
   ModelDetailsSchema,
   NameAgentRequestSchema,
   NameAgentResponseSchema,
+  RequestContextArgsSchema,
 } from "../../src/proto/agent_pb";
 import {
   frameConnectUnaryMessage,
@@ -27,6 +28,7 @@ export type RunMode =
   | "text-then-hang"
   | "tool-call-then-hang"
   | "tool-call-then-silent-hang"
+  | "task-tool-call"
   | "resume-text-then-hang";
 
 export interface TestCursorBackend {
@@ -53,6 +55,8 @@ export interface TestCursorBackend {
   getNameAgentUserMessages: () => string[];
   setRunMode: (mode: RunMode) => void;
   getRunRequestCount: () => number;
+  /** Tool names the proxy advertised via RequestContext (in order). */
+  getAdvertisedToolNames: () => string[];
   getRunUserTexts: () => string[];
   getRunModelIds: () => string[];
   getRunSelections: () => Array<{
@@ -73,6 +77,7 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
   const runModelIds: string[] = [];
   const runUserTexts: string[] = [];
   let runStallConsumed = false;
+  const advertisedToolNames: string[] = [];
   let discoveredModels: Array<{
     id: string;
     name: string;
@@ -165,6 +170,18 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
                 ),
               });
             } else if (message.message.case === "execClientMessage") {
+              // Capture the tools the proxy advertised via RequestContext so
+              // tests can assert bridged tool names (e.g. opencode_task).
+              const execClient = message.message.value;
+              if (
+                execClient.message.case === "requestContextResult" &&
+                execClient.message.value.result.case === "success"
+              ) {
+                for (const tool of execClient.message.value.result.value
+                  .requestContext.tools) {
+                  advertisedToolNames.push(tool.name);
+                }
+              }
               // The proxy delivered an mcpResult (tool-result resume). In the
               // tool-call modes, respond with visible text and then hang —
               // simulating a model that starts answering and stalls.
@@ -277,6 +294,73 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
         } catch {
           // ignore
         }
+        setTimeout(() => {
+          try {
+            stream.end();
+          } catch {
+            // ignore
+          }
+        }, 12_000);
+        return;
+      }
+      if (runMode === "task-tool-call") {
+        // Real flow: engine first asks for request context (the proxy replies
+        // with the advertised MCP tools), then the model emits the tool call.
+        // Emit an MCP tool call for the bridged OpenCode `task` tool under its
+        // advertised name (opencode_task). The proxy must surface the call to
+        // OpenCode with the ORIGINAL name (`task`) so delegation dispatches.
+        try {
+          const contextMsg = create(ExecServerMessageSchema, {
+            id: 1,
+            execId: "exec-ctx",
+            message: {
+              case: "requestContextArgs",
+              value: create(RequestContextArgsSchema, {}),
+            },
+          });
+          stream.write(
+            frameConnectUnaryMessage(
+              toBinary(
+                AgentServerMessageSchema,
+                create(AgentServerMessageSchema, {
+                  message: { case: "execServerMessage", value: contextMsg },
+                }),
+              ),
+            ),
+          );
+        } catch {
+          // ignore
+        }
+        setTimeout(() => {
+          try {
+            const execMsg = create(ExecServerMessageSchema, {
+              id: 2,
+              execId: "exec-1",
+              message: {
+                case: "mcpArgs",
+                value: create(McpArgsSchema, {
+                  name: "opencode_task",
+                  toolName: "opencode_task",
+                  toolCallId: "cursor-task-1",
+                  providerIdentifier: "opencode",
+                  args: {},
+                }),
+              },
+            });
+            stream.write(
+              frameConnectUnaryMessage(
+                toBinary(
+                  AgentServerMessageSchema,
+                  create(AgentServerMessageSchema, {
+                    message: { case: "execServerMessage", value: execMsg },
+                  }),
+                ),
+              ),
+            );
+          } catch {
+            // ignore
+          }
+        }, 100);
         setTimeout(() => {
           try {
             stream.end();
@@ -486,9 +570,13 @@ export async function startTestCursorBackend(): Promise<TestCursorBackend> {
       runModelIds.length = 0;
       runUserTexts.length = 0;
       runSelections.length = 0;
+      advertisedToolNames.length = 0;
     },
     getRunRequestCount() {
       return runRequestCount;
+    },
+    getAdvertisedToolNames() {
+      return [...advertisedToolNames];
     },
     getRunUserTexts() {
       return [...runUserTexts];

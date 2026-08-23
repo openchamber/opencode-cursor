@@ -18,7 +18,7 @@ Use the models on your Cursor subscription from OpenCode and [OpenChamber](https
 
 ### Sign in with Cursor, not an API key
 
-`opencode auth login --provider cursor` opens a PKCE browser flow. Tokens land in `~/.local/share/opencode/auth.json` and refresh automatically. In OpenChamber, if no OAuth button appears, the plugin still prints a login URL — open it, then reload.
+OpenCode opens a PKCE browser flow and owns the resulting credentials. In V1, `opencode auth login --provider cursor` starts the flow directly.
 
 ### Use the models your account actually has
 
@@ -42,13 +42,13 @@ npm install -g @openchamber/opencode-cursor
 
 ### 2. Register it in OpenCode
 
-Add (or merge) this into `~/.config/opencode/opencode.json`:
+For OpenCode V2, add (or merge) this into `~/.config/opencode/opencode.json`:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@openchamber/opencode-cursor"],
-  "provider": {
+  "plugins": ["@openchamber/opencode-cursor"],
+  "providers": {
     "cursor": { "name": "Cursor" }
   }
 }
@@ -56,11 +56,9 @@ Add (or merge) this into `~/.config/opencode/opencode.json`:
 
 ### 3. Sign in with Cursor
 
-```bash
-opencode auth login --provider cursor
-```
+Connect the Cursor integration from OpenCode. A browser window opens; approve access. You do not need a Cursor API key.
 
-A browser window opens. Approve access. You do not need a Cursor API key.
+For OpenCode V1, keep using the root package with `"plugin"` / `"provider"` and run `opencode auth login --provider cursor`.
 
 ### 4. Run a Cursor model
 
@@ -83,9 +81,9 @@ npm install -g .
 
 | Step | What happens |
 | --- | --- |
-| `opencode auth login --provider cursor` | Starts PKCE browser OAuth |
+| Connect Cursor in V2, or `opencode auth login --provider cursor` in V1 | Starts PKCE browser OAuth |
 | You approve in the browser | Cursor returns access + refresh tokens |
-| Plugin stores credentials | `~/.local/share/opencode/auth.json` |
+| OpenCode stores credentials | Host-owned credential storage |
 | Access expires | Plugin refreshes silently; permanent 4xx → re-login |
 
 **Browser OAuth is the only supported path.** You do not need a Cursor API key.
@@ -110,11 +108,11 @@ Model listings map Cursor’s variant catalog into OpenCode-native choices (`Opu
 
 ## Requirements
 
-- [OpenCode](https://opencode.ai) V1 (`@opencode-ai/plugin` ^1.15.7)
+- [OpenCode](https://opencode.ai) V2 (`./server`, selected automatically) or V1 (root export)
 - Active Cursor subscription
 - Bun (plugin runtime) · Node.js ≥ 18 (HTTP/2 bridge)
 
-> **OpenCode V2 is not currently supported.** V2 uses a different plugin API; adding `@opencode-ai/client` does not make a V1 plugin compatible.
+The V2 entrypoint discovers the live model catalog after login and reloads it without restarting OpenCode. If Cursor discovery is temporarily unavailable, it retains the authorization bootstrap model (or the last discovered catalog) until the next login or token refresh.
 
 ## Development
 

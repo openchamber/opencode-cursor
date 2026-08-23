@@ -5,7 +5,7 @@
  * 1. Browser-based OAuth login to Cursor
  * 2. Local proxy translating OpenAI format → Cursor gRPC protocol
  */
-import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin/v1";
+import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin-v1";
 import {
   startCursorBrowserLogin,
   getPendingCursorLogin,

@@ -105,6 +105,20 @@ test("V2 registers catalog, request hook, and host-owned OAuth", async () => {
     refresh: "refresh",
   });
   expect(reloads).toBe(1);
+  expect(await method.refresh({
+    type: "oauth",
+    methodID: "cursor-browser",
+    access: "access",
+    refresh: "refresh",
+    expires: 0,
+  })).toMatchObject({
+    type: "oauth",
+    methodID: "cursor-browser",
+    access: "new-access",
+    refresh: "new-refresh",
+    expires: 123,
+  });
+  expect(reloads).toBe(2);
 
   const provider: any = { settings: {} };
   const models: Record<string, any> = {};

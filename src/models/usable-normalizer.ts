@@ -1,4 +1,4 @@
-import { tool } from "@opencode-ai/plugin";
+import { tool } from "@opencode-ai/plugin-v1";
 import {
   literalCursorModelSelection,
   type CursorModel,

@@ -93,26 +93,30 @@ npm install -g .
 ## Architecture
 
 ```text
-OpenCode
+OpenCode (V1 per-workspace or V2 global daemon)
   └─ /v1/chat/completions
-       └─ Local OpenAI-compatible proxy
+       └─ Local OpenAI-compatible proxy (ephemeral port)
             └─ Node HTTP/2 bridge
                  └─ Cursor API (api2.cursor.sh)
 ```
 
 | Layer | Responsibility |
 | --- | --- |
-| **Plugin hooks** | OAuth, provider config, model catalog, selection headers |
+| **Plugin hooks** | OAuth, provider config, model catalog, selection headers (`@opencode-ai/plugin` V1 · `@opencode-ai/client` Promise API V2) |
 | **Proxy** | OpenAI ↔ Cursor protocol, tool loops, stalls, checkpoints |
 | **Transport** | Persistent / one-shot HTTP/2 bridges to Cursor |
+
+V2 note: the proxy still binds an ephemeral port inside the single shared service — no per-workspace Bun process and no private OpenCode DB/port. The global daemon owns service registration and storage; the bridge is process-local to that service host (or WSL + localhost forwarding).
 
 Model listings map Cursor’s variant catalog into OpenCode-native choices (`Opus 4.8`, `Opus 4.8 Thinking`, effort `low`→`max`, Fast, …). Selection is encoded so Cursor receives the exact `RequestedModel` parameters your account supports.
 
 ## Requirements
 
-- [OpenCode](https://opencode.ai)
+- [OpenCode](https://opencode.ai) V1 (`@opencode-ai/plugin` ^1.15.7) or V2 global daemon (`@opencode-ai/client` `0.0.0-beta-17595`, Promise API)
 - Active Cursor subscription
-- Bun (plugin runtime) · Node.js ≥ 18 (HTTP/2 bridge)
+- Node.js ≥ 18 (HTTP/2 bridge to `api2.cursor.sh`) · Bun required only for V1 per-workspace runtime; V2 uses a single global service with no per-workspace Bun
+
+> **OpenCode V2:** Verified with CodeNomad's V2 foundation (`MIGRATION_V2.md`) — the plugin's ephemeral HTTP/2 bridge to `api2.cursor.sh` binds inside the shared global daemon, not per workspace. CodeNomad V2 now includes Cursor quota via its embedded providers, but external Cursor OAuth through this plugin remains supported side-by-side.
 
 ## Development
 

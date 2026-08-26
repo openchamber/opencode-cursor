@@ -9,9 +9,12 @@
  * across requests: after a stream completes, the worker returns to
  * the idle pool. Dead workers are replaced automatically.
  */
-import { resolve as pathResolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnNodeBridge, type RuntimeProcess } from "./runtime.js";
 
-const PERSISTENT_BRIDGE_PATH = pathResolve(import.meta.dir, "h2-bridge-persistent.mjs");
+const PERSISTENT_BRIDGE_PATH = fileURLToPath(
+  new URL("./h2-bridge-persistent.mjs", import.meta.url),
+);
 
 // --- Typed message protocol constants ---
 const IN_NEW_REQUEST = 0x00;
@@ -42,18 +45,14 @@ interface WorkerCallbacks {
 }
 
 interface PersistentWorker {
-  proc: ReturnType<typeof Bun.spawn>;
+  proc: RuntimeProcess;
   cbs: WorkerCallbacks;
   /** True while the child process is still running. */
   alive: boolean;
 }
 
 function spawnWorker(): PersistentWorker {
-  const proc = Bun.spawn(["node", PERSISTENT_BRIDGE_PATH], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "ignore",
-  });
+  const proc = spawnNodeBridge(PERSISTENT_BRIDGE_PATH);
 
   const worker: PersistentWorker = {
     proc,
@@ -116,8 +115,7 @@ function spawnWorker(): PersistentWorker {
 function workerSend(worker: PersistentWorker, type: number, payload: Uint8Array): void {
   if (!worker.alive) return;
   try {
-    const stdin = worker.proc.stdin as import("bun").FileSink;
-    stdin.write(encodeTyped(type, payload));
+    worker.proc.stdin.write(encodeTyped(type, payload));
   } catch {
     // stdin closed — worker is dying
   }

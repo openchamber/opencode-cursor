@@ -19,7 +19,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-runtime.mjs",
-    "test": "bun test/smoke.ts",
+    "test": "bun test/smoke.ts && bun run test:node",
+    "test:node": "bun run build && node test/node-runtime.mjs",
     "prepublishOnly": "npm run build"
   },
   "repository": {

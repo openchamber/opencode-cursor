@@ -124,6 +124,12 @@ import {
   literalCursorModelSelection,
   type CursorModelSelection,
 } from "./model-selection.js";
+import {
+  serveFetch,
+  spawnNodeBridge,
+  type FetchServer,
+  type RuntimeProcess,
+} from "./runtime.js";
 
 // Re-export pure helpers so existing tests can import from ./proxy
 export {
@@ -528,7 +534,7 @@ interface SpawnBridgeOptions {
 }
 
 function spawnBridge(options: SpawnBridgeOptions): {
-  proc: ReturnType<typeof Bun.spawn>;
+  proc: RuntimeProcess;
   write: (data: Uint8Array) => void;
   end: () => void;
   kill: () => void;
@@ -537,11 +543,7 @@ function spawnBridge(options: SpawnBridgeOptions): {
   /** True while the bridge subprocess is still running. */
   get alive(): boolean;
 } {
-  const proc = Bun.spawn(["node", BRIDGE_PATH], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "ignore",
-  });
+  const proc = spawnNodeBridge(BRIDGE_PATH);
 
   const config = JSON.stringify({
     accessToken: options.accessToken,
@@ -614,7 +616,7 @@ function spawnBridge(options: SpawnBridgeOptions): {
   };
 }
 
-let proxyServer: ReturnType<typeof Bun.serve> | undefined;
+let proxyServer: FetchServer | undefined;
 let proxyPort: number | undefined;
 let proxyAccessTokenProvider: (() => Promise<string>) | undefined;
 let proxyModels: Array<{ id: string; name: string }> = [];
@@ -622,7 +624,7 @@ const DEFAULT_MODEL_ID = "default";
 
 /**
  * Optional pinned listen port from OPENCODE_CURSOR_PROXY_PORT.
- * When unset (the default), Bun binds an ephemeral OS port (0).
+ * When unset (the default), the runtime binds an ephemeral OS port (0).
  */
 function preferredProxyPort(): number {
   const raw = process.env.OPENCODE_CURSOR_PROXY_PORT;
@@ -676,7 +678,7 @@ export async function startProxy(
   }
 
   const listenPort = preferredProxyPort();
-  proxyServer = Bun.serve({
+  proxyServer = await serveFetch({
     port: listenPort,
     idleTimeout: 255, // max — Cursor responses can take 30s+
     async fetch(req) {

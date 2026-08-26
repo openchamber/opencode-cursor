@@ -112,7 +112,7 @@ Model listings map Cursor’s variant catalog into OpenCode-native choices (`Opu
 
 - [OpenCode](https://opencode.ai)
 - Active Cursor subscription
-- Bun (plugin runtime) · Node.js ≥ 18 (HTTP/2 bridge)
+- Bun or Node.js ≥ 18 (including OpenCode Desktop's Electron runtime)
 
 ## Development
 
@@ -120,6 +120,8 @@ Model listings map Cursor’s variant catalog into OpenCode-native choices (`Opu
 bun install
 bun run build
 bun run test
+# Node/Electron runtime regression only
+bun run test:node
 ```
 
 Optional knobs: `OPENCODE_CURSOR_PRE_OUTPUT_STALL_TIMEOUT_MS`, `OPENCODE_CURSOR_POST_TOOL_PRE_OUTPUT_STALL_TIMEOUT_MS`, `OPENCODE_CURSOR_TOOL_DEBOUNCE_MS`.

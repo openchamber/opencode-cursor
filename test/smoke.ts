@@ -718,6 +718,117 @@ async function testAvailableModelParameterGrouping(modules: TestModules) {
     "Grok Code Fast 1",
     "Expected tooltip title for named Grok models",
   );
+  assertEqual(
+    namedModels.find((model) => model.id === "grok-code-fast-1")?.contextWindow,
+    256_000,
+    "Expected tooltip context window parsing",
+  );
+  assertEqual(
+    namedModels.find((model) => model.id === "grok-4-5")?.reasoning,
+    true,
+    "Expected supportsThinking on flat models",
+  );
+
+  const geminiModels = modules.normalizeAvailableModels([
+    {
+      name: "gemini-3.8-flash",
+      serverModelName: "gemini-3.8-flash",
+      clientDisplayName: "Gemini 3.8 Flash",
+      supportsImages: true,
+      supportsThinking: true,
+      parameterDefinitions: [
+        enumParameter("reasoning_effort", [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+        ]),
+      ],
+      variants: ["low", "medium", "high"].map((effort) => ({
+        parameterValues: [{ id: "reasoning_effort", value: effort }],
+        legacySlug: `gemini-3.8-flash-${effort}`,
+        isDefaultNonMaxConfig: effort === "medium",
+      })),
+    },
+  ]);
+  assertEqual(
+    geminiModels.length,
+    1,
+    "Expected Gemini model with reasoning_effort variants",
+  );
+  assertArrayEqual(
+    Object.keys(geminiModels[0]!.variants),
+    ["low", "medium", "high"],
+    "Expected reasoning_effort values to normalize as effort variants",
+  );
+  assertEqual(
+    geminiModels[0]!.supportsImages,
+    true,
+    "Expected supportsImages from AvailableModels",
+  );
+
+  const textOnlyModels = modules.normalizeAvailableModels([
+    {
+      name: "text-only-model",
+      serverModelName: "text-only-model",
+      supportsImages: false,
+      supportsThinking: false,
+    },
+  ]);
+  assertEqual(
+    textOnlyModels[0]!.supportsImages,
+    false,
+    "Expected explicit supportsImages=false",
+  );
+
+  const maxContextModels = modules.normalizeAvailableModels([
+    {
+      name: "max-context-model",
+      serverModelName: "max-context-model",
+      contextTokenLimitForMaxMode: 272_000,
+    },
+  ]);
+  assertEqual(
+    maxContextModels[0]!.contextWindow,
+    272_000,
+    "Expected contextTokenLimitForMaxMode when variant context is absent",
+  );
+
+  const variantTooltipModels = modules.normalizeAvailableModels([
+    {
+      name: "gemini-3.8-flash",
+      serverModelName: "gemini-3.8-flash",
+      clientDisplayName: "Gemini 3.8 Flash",
+      supportsImages: true,
+      parameterDefinitions: [
+        enumParameter("reasoning_effort", [{ value: "high" }]),
+      ],
+      variants: [
+        {
+          parameterValues: [{ id: "reasoning_effort", value: "high" }],
+          legacySlug: "gemini-3.8-flash-high",
+          tooltipData: {
+            markdownContent:
+              "**Gemini 3.8 Flash**<br />Great for daily use.<br /><br />1M context window",
+          },
+        },
+      ],
+    },
+  ]);
+  assertEqual(
+    variantTooltipModels[0]!.contextWindow,
+    1_000_000,
+    "Expected variant tooltip context window parsing",
+  );
+
+  const { buildConfigModelEntries } = await import(
+    "../src/provider/model-descriptor"
+  );
+  const configEntries = buildConfigModelEntries(textOnlyModels);
+  assertArrayEqual(
+    configEntries["text-only-model"]!.modalities.input,
+    ["text"],
+    "Expected config descriptor to omit image when supportsImages=false",
+  );
 
   console.log("[test] Parameter-aware AvailableModels grouping OK");
 }

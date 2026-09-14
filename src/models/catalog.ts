@@ -7,6 +7,8 @@ import {
 import { normalizeAvailableModels } from "./available-normalizer.js";
 import type { CursorModel } from "../model-selection.js";
 import { normalizeCursorModels } from "./usable-normalizer.js";
+import { AVAILABLE_MODELS_RPC_TIMEOUT_MS } from "../shared/constants.js";
+import { log } from "../shared/log.js";
 
 const GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
 const AVAILABLE_MODELS_PATH = "/aiserver.v1.AiService/AvailableModels";
@@ -40,8 +42,14 @@ async function fetchCursorAvailableModels(
       requestBody,
       contentType: "application/json",
       connectProtocolVersion: "1",
+      timeoutMs: AVAILABLE_MODELS_RPC_TIMEOUT_MS,
     });
     if (response.timedOut || response.exitCode !== 0 || response.body.length === 0) {
+      if (response.timedOut) {
+        log.warn(
+          `[opencode-cursor] AvailableModels timed out after ${AVAILABLE_MODELS_RPC_TIMEOUT_MS}ms; falling back to GetUsableModels`,
+        );
+      }
       return null;
     }
 
@@ -50,6 +58,11 @@ async function fetchCursorAvailableModels(
     const models = Array.isArray(record?.models)
       ? normalizeAvailableModels(record.models)
       : [];
+    if (models.length > 0) {
+      log.info(
+        `[opencode-cursor] discovered ${models.length} models via AvailableModels`,
+      );
+    }
     return models.length > 0 ? models : null;
   } catch {
     return null;
@@ -91,10 +104,14 @@ let cachedModels: CursorModel[] | null = null;
  */
 export async function getCursorModels(apiKey: string): Promise<CursorModel[]> {
   if (cachedModels) return cachedModels;
-  const discovered =
-    (await fetchCursorAvailableModels(apiKey)) ??
-    (await fetchCursorUsableModels(apiKey));
+  const available = await fetchCursorAvailableModels(apiKey);
+  const discovered = available ?? (await fetchCursorUsableModels(apiKey));
   if (discovered && discovered.length > 0) {
+    if (!available) {
+      log.warn(
+        `[opencode-cursor] using GetUsableModels fallback (${discovered.length} models; capability metadata may be incomplete)`,
+      );
+    }
     cachedModels = discovered;
     return cachedModels;
   }

@@ -10,6 +10,7 @@ import {
   LOGIN_PLACEHOLDER_MODELS,
   type CursorModel,
 } from "../models.js";
+import { CONFIG_MODEL_DISCOVERY_TIMEOUT_MS } from "../shared/constants.js";
 import { log } from "../shared/log.js";
 
 /** Reject a promise if it does not settle within `ms` milliseconds. */
@@ -84,7 +85,7 @@ export async function resolveConfigModels(): Promise<CursorModel[]> {
     try {
       discovered = await withTimeout(
         getCursorModels(accessToken),
-        15_000,
+        CONFIG_MODEL_DISCOVERY_TIMEOUT_MS,
       );
     } catch (err) {
       const summary = err instanceof Error ? err.message : String(err);

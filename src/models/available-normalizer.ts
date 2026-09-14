@@ -4,9 +4,14 @@ import type {
   CursorModelSelection,
 } from "../model-selection.js";
 import {
-  DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
 } from "../shared/constants.js";
+import {
+  extractAvailableModelCapabilities,
+  inferAvailableContextWindow,
+  isEffortParameterId,
+  readRawEffortValue,
+} from "./model-capabilities.js";
 interface VariantDescriptor {
   key: string;
   idSuffixes: readonly string[];
@@ -95,6 +100,7 @@ export function normalizeAvailableModels(models: readonly unknown[]): CursorMode
     if (!model || !name) continue;
 
     const displayName = pickAvailableDisplayName(model, name);
+    const capabilities = extractAvailableModelCapabilities(model);
     const serverModelName = stringProp(model, "serverModelName") ?? name;
     const definitions = arrayProp(model, "parameterDefinitions")
       .map(asRecord)
@@ -112,7 +118,7 @@ export function normalizeAvailableModels(models: readonly unknown[]): CursorMode
       const parameters = parseParameterValues(variant.parameterValues);
       const values = new Map(parameters.map((parameter) => [parameter.id, parameter.value]));
       const context = values.get("context");
-      const rawEffort = values.get("reasoning") ?? values.get("effort");
+      const rawEffort = readRawEffortValue(values);
       const effort = normalizeEffort(rawEffort);
       if (rawEffort && !effort) continue;
       const structuralParts = buildStructuralParts(values, structuralParameters);
@@ -136,12 +142,14 @@ export function normalizeAvailableModels(models: readonly unknown[]): CursorMode
         parameters,
         maxMode: variant.isMaxMode === true,
       };
+      const inferredContext = inferAvailableContextWindow(model, context, variant);
       const group = groups.get(groupKey) ?? {
         id: groupId,
         name: groupName,
-        contextWindow: parseTokenLimit(context) ?? DEFAULT_CONTEXT_WINDOW,
+        contextWindow: inferredContext,
         selections: [],
       };
+      group.contextWindow = Math.max(group.contextWindow, inferredContext);
       group.selections.push({
         effort,
         isDefault:
@@ -164,8 +172,9 @@ export function normalizeAvailableModels(models: readonly unknown[]): CursorMode
       const candidate: CursorModel = {
         id: name,
         name: displayName,
-        reasoning: model.supportsThinking === true,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
+        reasoning: capabilities.supportsThinking,
+        supportsImages: capabilities.supportsImages,
+        contextWindow: inferAvailableContextWindow(model),
         maxTokens: DEFAULT_MAX_TOKENS,
         defaultSelection: flatSelection,
         variants: {},
@@ -206,6 +215,7 @@ export function normalizeAvailableModels(models: readonly unknown[]): CursorMode
         id: publicId,
         name: group.name,
         reasoning: Object.keys(variantsByEffort).length > 0,
+        supportsImages: capabilities.supportsImages,
         contextWindow: group.contextWindow,
         maxTokens: DEFAULT_MAX_TOKENS,
         defaultSelection: defaultEntry.selection,
@@ -293,7 +303,7 @@ function buildStructuralParameterMetadata(
   const metadata = new Map<string, ParameterMetadata>();
   for (const [index, definition] of definitions.entries()) {
     const id = stringProp(definition, "id");
-    if (!id || id === "reasoning" || id === "effort") continue;
+    if (!id || isEffortParameterId(id)) continue;
     const values = parameterDefinitionValues(definition);
     metadata.set(id, {
       id,
@@ -311,7 +321,7 @@ function buildStructuralParameterMetadata(
 
   for (const variant of variants) {
     for (const parameter of parseParameterValues(variant.parameterValues)) {
-      if (parameter.id === "reasoning" || parameter.id === "effort") continue;
+      if (isEffortParameterId(parameter.id)) continue;
       const existing = metadata.get(parameter.id);
       if (existing) {
         existing.baseline ??= parameter.value;
@@ -414,17 +424,6 @@ function compareVariantDisplayOrder(a: string, b: string): number {
 
 function normalizeIdPart(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function parseTokenLimit(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase().replace(/,/g, "");
-  const match = normalized.match(/^(\d+(?:\.\d+)?)([km])?$/);
-  if (!match) return undefined;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return undefined;
-  const multiplier = match[2] === "m" ? 1_000_000 : match[2] === "k" ? 1_000 : 1;
-  return Math.round(amount * multiplier);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

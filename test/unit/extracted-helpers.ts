@@ -57,6 +57,17 @@ export async function runExtractedHelperUnitTests(): Promise<void> {
     "title detection",
   );
   assert(
+    isTitleGenerationRequest([
+      {
+        role: "system",
+        content:
+          "You are a title generator. Output ONLY a thread title.\nGenerate a brief title that helps the user find this conversation later.",
+      },
+      { role: "user", content: "hello" },
+    ]),
+    "OpenCode 1.18 title prompt detection",
+  );
+  assert(
     isSummaryGenerationRequest([
       {
         role: "system",

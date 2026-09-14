@@ -19,6 +19,8 @@ export interface CursorModel {
   id: string;
   name: string;
   reasoning: boolean;
+  /** From Cursor AvailableModels `supportsImages` when known. */
+  supportsImages?: boolean;
   contextWindow: number;
   maxTokens: number;
   defaultSelection: CursorModelSelection;

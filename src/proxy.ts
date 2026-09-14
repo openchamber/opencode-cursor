@@ -118,6 +118,7 @@ import {
 } from "./conversation/identity.js";
 import { BridgePool, type BridgeHandle } from "./bridge-pool.js";
 import { log } from "./shared/log.js";
+import { NAME_AGENT_RPC_TIMEOUT_MS } from "./shared/constants.js";
 import {
   CURSOR_SELECTION_HEADER,
   decodeCursorModelSelection,
@@ -910,8 +911,18 @@ async function nameConversationViaCursor(
       accessToken,
       rpcPath: NAME_AGENT_PATH,
       requestBody,
+      timeoutMs: NAME_AGENT_RPC_TIMEOUT_MS,
     });
-    if (response.timedOut || response.exitCode !== 0 || response.body.length === 0) {
+    if (response.timedOut) {
+      log.warn(
+        `[proxy] NameAgent timed out after ${NAME_AGENT_RPC_TIMEOUT_MS}ms — session title will stay default`,
+      );
+      return null;
+    }
+    if (response.exitCode !== 0 || response.body.length === 0) {
+      log.warn(
+        `[proxy] NameAgent failed exit=${response.exitCode} bodyBytes=${response.body.length}`,
+      );
       return null;
     }
     const name = decodeNameAgentResponse(response.body)?.name?.trim();

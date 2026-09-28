@@ -14,9 +14,12 @@ export function isTitleGenerationRequest(messages: OpenAIMessage[]): boolean {
     .filter((m) => m.role === "system")
     .map((m) => textContent(m.content))
     .join(" ");
+  const normalized = systemText.toLowerCase();
   return (
-    systemText.toLowerCase().includes("title generator") ||
-    systemText.toLowerCase().includes("generate a short title")
+    normalized.includes("title generator") ||
+    normalized.includes("generate a short title") ||
+    normalized.includes("generate a brief title") ||
+    normalized.includes("output only a thread title")
   );
 }
 

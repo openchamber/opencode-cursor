@@ -1,4 +1,5 @@
 import type { CursorModel } from "../models.js";
+import { buildInputModalities } from "../models/model-capabilities.js";
 import {
   CURSOR_PROVIDER_ID,
   CURSOR_VARIANT_OPTION,
@@ -9,6 +10,10 @@ import {
   OPENAI_COMPATIBLE_NPM,
 } from "../shared/constants.js";
 import { estimateModelCost } from "./pricing.js";
+
+function modelSupportsImages(model: CursorModel): boolean {
+  return model.supportsImages !== false;
+}
 
 function selectDefaultCursorModel(
   models: CursorModel[],
@@ -52,6 +57,8 @@ function buildProviderModel(
   const contextWindow =
     model.contextWindow > 0 ? model.contextWindow : DEFAULT_CONTEXT_WINDOW;
   const maxTokens = model.maxTokens > 0 ? model.maxTokens : DEFAULT_MAX_TOKENS;
+  const supportsImages = modelSupportsImages(model);
+  const inputModalities = buildInputModalities(supportsImages);
   return {
     id,
     providerID: CURSOR_PROVIDER_ID,
@@ -79,7 +86,7 @@ function buildProviderModel(
       input: {
         text: true,
         audio: false,
-        image: true,
+        image: supportsImages,
         video: false,
         pdf: false,
       },
@@ -93,7 +100,7 @@ function buildProviderModel(
       interleaved: false,
     },
     modalities: {
-      input: ["text", "image"],
+      input: inputModalities,
       output: ["text"],
     },
     cost: estimateModelCost(model.id),
@@ -138,6 +145,7 @@ export function buildConfigModelEntries(
       model.contextWindow > 0 ? model.contextWindow : DEFAULT_CONTEXT_WINDOW;
     const maxTokens =
       model.maxTokens > 0 ? model.maxTokens : DEFAULT_MAX_TOKENS;
+    const inputModalities = buildInputModalities(modelSupportsImages(model));
     entries[model.id] = {
       name: model.name,
       // OpenCode prepends generic low/medium/high variants for reasoning-capable
@@ -147,15 +155,16 @@ export function buildConfigModelEntries(
       // reasoning output and routing are handled by the local proxy.
       reasoning: false,
       tool_call: true,
+      attachment: true,
       // Required for OpenCode's static config path: without modalities.input
       // including "image", attachments are stripped before they reach the proxy.
       modalities: {
-        input: ["text", "image"],
+        input: inputModalities,
         output: ["text"],
       },
       capabilities: {
         tools: true,
-        input: ["text", "image"],
+        input: inputModalities,
         output: ["text"],
       },
       cost: estimateModelCost(model.id),
@@ -183,17 +192,21 @@ export function buildConfigModelEntries(
       defaultModel.maxTokens > 0
         ? defaultModel.maxTokens
         : DEFAULT_MAX_TOKENS;
+    const defaultInputModalities = buildInputModalities(
+      modelSupportsImages(defaultModel),
+    );
     entries[DEFAULT_MODEL_ID] = {
       name: `Default (${defaultModel.name})`,
       reasoning: false,
       tool_call: true,
+      attachment: true,
       modalities: {
-        input: ["text", "image"],
+        input: defaultInputModalities,
         output: ["text"],
       },
       capabilities: {
         tools: true,
-        input: ["text", "image"],
+        input: defaultInputModalities,
         output: ["text"],
       },
       cost: estimateModelCost(defaultModel.id),

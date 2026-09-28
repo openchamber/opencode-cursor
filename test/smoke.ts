@@ -718,6 +718,117 @@ async function testAvailableModelParameterGrouping(modules: TestModules) {
     "Grok Code Fast 1",
     "Expected tooltip title for named Grok models",
   );
+  assertEqual(
+    namedModels.find((model) => model.id === "grok-code-fast-1")?.contextWindow,
+    256_000,
+    "Expected tooltip context window parsing",
+  );
+  assertEqual(
+    namedModels.find((model) => model.id === "grok-4-5")?.reasoning,
+    true,
+    "Expected supportsThinking on flat models",
+  );
+
+  const geminiModels = modules.normalizeAvailableModels([
+    {
+      name: "gemini-3.8-flash",
+      serverModelName: "gemini-3.8-flash",
+      clientDisplayName: "Gemini 3.8 Flash",
+      supportsImages: true,
+      supportsThinking: true,
+      parameterDefinitions: [
+        enumParameter("reasoning_effort", [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+        ]),
+      ],
+      variants: ["low", "medium", "high"].map((effort) => ({
+        parameterValues: [{ id: "reasoning_effort", value: effort }],
+        legacySlug: `gemini-3.8-flash-${effort}`,
+        isDefaultNonMaxConfig: effort === "medium",
+      })),
+    },
+  ]);
+  assertEqual(
+    geminiModels.length,
+    1,
+    "Expected Gemini model with reasoning_effort variants",
+  );
+  assertArrayEqual(
+    Object.keys(geminiModels[0]!.variants),
+    ["low", "medium", "high"],
+    "Expected reasoning_effort values to normalize as effort variants",
+  );
+  assertEqual(
+    geminiModels[0]!.supportsImages,
+    true,
+    "Expected supportsImages from AvailableModels",
+  );
+
+  const textOnlyModels = modules.normalizeAvailableModels([
+    {
+      name: "text-only-model",
+      serverModelName: "text-only-model",
+      supportsImages: false,
+      supportsThinking: false,
+    },
+  ]);
+  assertEqual(
+    textOnlyModels[0]!.supportsImages,
+    false,
+    "Expected explicit supportsImages=false",
+  );
+
+  const maxContextModels = modules.normalizeAvailableModels([
+    {
+      name: "max-context-model",
+      serverModelName: "max-context-model",
+      contextTokenLimitForMaxMode: 272_000,
+    },
+  ]);
+  assertEqual(
+    maxContextModels[0]!.contextWindow,
+    272_000,
+    "Expected contextTokenLimitForMaxMode when variant context is absent",
+  );
+
+  const variantTooltipModels = modules.normalizeAvailableModels([
+    {
+      name: "gemini-3.8-flash",
+      serverModelName: "gemini-3.8-flash",
+      clientDisplayName: "Gemini 3.8 Flash",
+      supportsImages: true,
+      parameterDefinitions: [
+        enumParameter("reasoning_effort", [{ value: "high" }]),
+      ],
+      variants: [
+        {
+          parameterValues: [{ id: "reasoning_effort", value: "high" }],
+          legacySlug: "gemini-3.8-flash-high",
+          tooltipData: {
+            markdownContent:
+              "**Gemini 3.8 Flash**<br />Great for daily use.<br /><br />1M context window",
+          },
+        },
+      ],
+    },
+  ]);
+  assertEqual(
+    variantTooltipModels[0]!.contextWindow,
+    1_000_000,
+    "Expected variant tooltip context window parsing",
+  );
+
+  const { buildConfigModelEntries } = await import(
+    "../src/provider/model-descriptor"
+  );
+  const configEntries = buildConfigModelEntries(textOnlyModels);
+  assertArrayEqual(
+    configEntries["text-only-model"]!.modalities.input,
+    ["text"],
+    "Expected config descriptor to omit image when supportsImages=false",
+  );
 
   console.log("[test] Parameter-aware AvailableModels grouping OK");
 }
@@ -3255,6 +3366,113 @@ async function testPostToolPreOutputStallBudget(
   console.log("[test] Post-tool pre-output stall budget OK");
 }
 
+async function testOpenCodeV2SetupExport() {
+  console.log("[test] Testing OpenCode 2.0 Plugin Object export...");
+  const v2Export = (await import("../src/index.js")).default as any;
+  if (!v2Export || typeof v2Export !== "object") {
+    throw new Error("Expected default export to be an object for OpenCode 2.0 Schema compatibility");
+  }
+  if (v2Export.id !== "cursor") {
+    throw new Error(`Expected v2Export.id to be 'cursor', got '${v2Export.id}'`);
+  }
+  if (typeof v2Export.setup !== "function") {
+    throw new Error("Expected v2Export.setup to be a function");
+  }
+  if (typeof v2Export.server !== "function") {
+    throw new Error("Expected v2Export.server to be a function for V1 compatibility");
+  }
+
+  // 1. Verify V1 compatibility: calling v2Export.server directly
+  const v1Hooks = await v2Export.server({
+    directory: process.cwd(),
+    project: { id: "test-proj" },
+    client: {} as any,
+  });
+  if (!v1Hooks || typeof v1Hooks.config !== "function" || !v1Hooks.auth) {
+    throw new Error("Expected v2Export.server(input) to return standard V1 hooks");
+  }
+
+  // 2. Verify model alias transparency: no silent model rewriting
+  const proxy = await import("../src/proxy.js");
+  assertEqual(
+    proxy.resolveProxyModelId("claude-3.5-sonnet"),
+    "claude-3.5-sonnet",
+    "Model ID must be passed through without silent rewriting",
+  );
+  assertEqual(
+    proxy.resolveProxyModelId("gpt-4o"),
+    "gpt-4o",
+    "gpt-4o must not be silently mapped to another model",
+  );
+
+  // 3. Mock OpenCode 2.0 context simulating the REAL ProviderEditor with models.set(id, Model.Info[])
+  let transformCount = 0;
+  let providerUpdated = false;
+  let modelsSetCalled = false;
+  let receivedModelList: any = null;
+  const sessionHooks: Record<string, Function> = {};
+
+  const realEditorMock = {
+    update: (id: string, updateFn: Function) => {
+      if (id === "cursor") {
+        providerUpdated = true;
+        const p = { settings: {}, options: {} };
+        updateFn(p);
+      }
+    },
+    models: {
+      set: (providerId: string, list: any) => {
+        if (providerId === "cursor") {
+          modelsSetCalled = true;
+          receivedModelList = list;
+          // Verify OpenCode 2.0.15 kernel contract: must be an Array and support .map()
+          if (!Array.isArray(list)) {
+            throw new Error(`OpenCode 2.0.15 ProviderEditor.models.set expects an Array, received: ${typeof list}`);
+          }
+          list.map((m: any) => m.id); // Simulates kernel bp(T, N) => N.map(...)
+        }
+      },
+      update: () => {},
+    },
+  };
+
+  let reloadCalled = false;
+  const mockCtx = {
+    provider: {
+      transform: (fn: (providers: any) => void) => {
+        transformCount++;
+        fn(realEditorMock);
+      },
+      reload: async () => {
+        reloadCalled = true;
+      },
+    },
+    session: {
+      hook: (event: string, fn: Function) => {
+        sessionHooks[event] = fn;
+      },
+    },
+  };
+
+  // 4. Test non-blocking startup: setupV2 must settle immediately without awaiting long discovery
+  const setupStart = Date.now();
+  await v2Export.setup(mockCtx);
+  const setupDuration = Date.now() - setupStart;
+  assert(setupDuration < 1000, `setupV2 must be non-blocking and settle within 1s; took ${setupDuration}ms`);
+
+  if (!providerUpdated) {
+    throw new Error("Expected providers.update('cursor', ...) to be called during V2 setup");
+  }
+  if (!sessionHooks["model.request"] || !sessionHooks["context"]) {
+    throw new Error("Expected model.request and context hooks to be registered on ctx.session");
+  }
+
+  // Wait briefly for background model discovery to trigger reload/transform with Model.Info[]
+  await new Promise((r) => setTimeout(r, 200));
+
+  console.log("[test] OpenCode 2.0 Plugin Object setup export OK");
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -3320,6 +3538,7 @@ async function main() {
     await testTaskToolBridging(modules, backend);
     await testPreOutputStallBudgetAllowsSlowThinking(modules, backend);
     await testPostToolPreOutputStallBudget(modules, backend);
+    await testOpenCodeV2SetupExport();
     console.log("\n✓ All smoke tests passed");
     process.exit(0);
   } catch (err) {
